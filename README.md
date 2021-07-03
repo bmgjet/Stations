@@ -4,3 +4,4 @@
 <p>I have attached a prepatched version but I dont intend to keep this uptodate so it may stop working in the future.<br /><a href="https://github.com/bmgjet/Stations/raw/main/Assembly-CSharp.dll">Assembly-CSharp.dll</a></p>
 <p><br />You cant use youtube or other video streaming links since they are mp4.<br />You can how ever use a mp3 ripping websites download link such as "<a href="https://320ytmp3.com/en7/&quot;">https://320ytmp3.com/en7/"</a></p>
 <p>Such as go there. Paste your youtube link in and convert it.<br />Then select the lowest quality and rightclick on download button to copy its link.<br /><img src="https://github.com/bmgjet/Stations/raw/main/sccc.jpg" alt="" /></p>
+www.youtube.com/embed/-QgAmtFja9s

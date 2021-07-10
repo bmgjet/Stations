@@ -1,3 +1,8 @@
+using Newtonsoft.Json;
+using Oxide.Core;
+using Oxide.Core.Libraries;
+using System;
+using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
 
@@ -8,17 +13,80 @@ namespace Oxide.Plugins
     {
         #region Declarations
         const string perm = "Stations.use";
-        const string permyoutube = "Stations.youtube";
-        const string URL = "example.com:1234"; //Your YouTube2MP3 Server IP and Port
-        bool BypassMp3Check = false;
+        const string permYT = "Stations.youtube";
+        const string permAdmin = "Stations.admin";
+
+        private static SaveData _data;
+        private static PluginConfig config;
         private PropertyInfo _CurrentRadioIp = typeof(BoomBox).GetProperty("CurrentRadioIp");
+        #endregion
+
+        #region Configuration
+        private class PluginConfig
+        {
+            [JsonProperty(PropertyName = "Stations Server URL: ")] public string URL { get; set; }
+            [JsonProperty(PropertyName = "Cool Down Seconds: ")] public float Cooldown { get; set; }
+            [JsonProperty(PropertyName = "Bypass MP3 Check: ")] public bool MP3Check { get; set; }
+        }
+
+        private PluginConfig GetDefaultConfig()
+        {
+            return new PluginConfig
+            {
+                URL = "example.com:1234",
+                Cooldown = 10f,
+                MP3Check = true,
+            };
+        }
+
+        protected override void LoadDefaultConfig()
+        {
+            Config.Clear();
+            Config.WriteObject(GetDefaultConfig(), true);
+            config = Config.ReadObject<PluginConfig>();
+        }
+        protected override void SaveConfig()
+        {
+            Config.WriteObject(config, true);
+        }
+        private void WriteSaveData() =>
+        Interface.Oxide.DataFileSystem.WriteObject(Name, _data);
+
+        class SaveData
+        {
+            public Dictionary<string, DateTime> CoolDown = new Dictionary<string, DateTime>();
+        }
         #endregion
 
         #region Hooks
         void Init()
         {
             permission.RegisterPermission(perm, this);
-            permission.RegisterPermission(permyoutube, this);
+            permission.RegisterPermission(permYT, this);
+            permission.RegisterPermission(permAdmin, this);
+
+            if (!Interface.Oxide.DataFileSystem.ExistsDatafile(Name))
+                Interface.Oxide.DataFileSystem.GetDatafile(Name).Save();
+
+            _data = Interface.Oxide.DataFileSystem.ReadObject<SaveData>(Name);
+            if (_data == null)
+            {
+                WriteSaveData();
+            }
+
+            config = Config.ReadObject<PluginConfig>();
+            if (config == null)
+            {
+                LoadDefaultConfig();
+            }
+        }
+        void Unload()
+        {
+            if (_data != null)
+                _data = null;
+
+            if (config != null)
+                config = null;
         }
         #endregion
 
@@ -27,20 +95,41 @@ namespace Oxide.Plugins
             player.ChatMessage("<color=red>Couldn't find boombox deployed or held.</color>");
         }
 
-        public bool CheckLink(string url)
+        public bool CheckLink(string url, BasePlayer player)
         {
-            if (!BypassMp3Check)
+            if (Cooldown(player).TotalSeconds > 0)
             {
-                if (!url.Contains(".mp3"))
+                player.ChatMessage("Please wait for cooldown " + Cooldown(player).ToString("g"));
+                return false;
+            }
+            if (config.MP3Check)
+            {
+                if (!url.ToLower().Contains(".mp3"))
                 {
+                    player.ChatMessage("<color=red>Must be a mp3!</color>");
                     return false;
                 }
             }
-            if (!url.Contains("http"))
+            if (!url.ToLower().Contains("http"))
             {
+                player.ChatMessage("<color=red>Must be a link!</color>");
                 return false;
             }
             return true;
+        }
+        private TimeSpan CeilingTimeSpan(TimeSpan timeSpan) =>
+        new TimeSpan((long)Math.Ceiling(1.0 * timeSpan.Ticks / 10000000) * 10000000);
+
+        public TimeSpan Cooldown(BasePlayer player)
+        {
+            if (_data.CoolDown.ContainsKey(player.UserIDString))
+            {
+                DateTime lastPlayed = _data.CoolDown[player.UserIDString];
+                return CeilingTimeSpan(lastPlayed.AddSeconds(config.Cooldown) - DateTime.Now);
+            }
+            _data.CoolDown.Add(player.UserIDString, DateTime.Now);
+            WriteSaveData();
+            return DateTime.Now - DateTime.Now;
         }
 
         public void ChangeStationPortable(HeldBoomBox portableradio, string newlink, BasePlayer player)
@@ -54,7 +143,11 @@ namespace Oxide.Plugins
             //start playing
             portableradio.BoxController.ServerTogglePlay(true);
             Puts(player.displayName + " Played: " + newlink);
-            player.ChatMessage("Please wait for music to download/encode!");
+            if (_data.CoolDown.ContainsKey(player.UserIDString))
+            {
+                _data.CoolDown[player.UserIDString] = DateTime.Now;
+                WriteSaveData();
+            }
         }
 
         public void ChangeStationDeployed(DeployableBoomBox radio, string newlink, BasePlayer player)
@@ -68,8 +161,70 @@ namespace Oxide.Plugins
             //play
             radio.BoxController.ServerTogglePlay(true);
             Puts(player.displayName + " Played: " + newlink);
-            player.ChatMessage("Please wait for music to download/encode!");
+            if (_data.CoolDown.ContainsKey(player.UserIDString))
+            {
+                _data.CoolDown[player.UserIDString] = DateTime.Now;
+                WriteSaveData();
+            }
         }
+
+
+
+        public void CheckSettings(string[] args, BasePlayer player)
+        {
+
+            if (args.Length == 2)
+            {
+                switch (args[0])
+                {
+                    case "mp3":
+                        config.MP3Check = !config.MP3Check;
+                        SaveConfig();
+                        player.ChatMessage("Must be MP3: " + config.MP3Check);
+                        return;
+                    case "url":
+                        config.URL = args[1];
+                        SaveConfig();
+                        return;
+                    case "cooldown":
+                        try
+                        {
+                            config.Cooldown = float.Parse(args[1]);
+                        }
+                        catch { config.Cooldown = 10f; }
+                        SaveConfig();
+                        return;
+                }
+            }
+        }
+
+        public void Status(string DLURL, BasePlayer player, string oldmsg)
+        {
+            timer.Once(0.5f, () =>
+            {
+                webrequest.Enqueue(DLURL, null, (code, response) =>
+                {
+                    if (code != 200 || response == null)
+                    {
+                        Puts($"Couldn't get an response");
+                        return;
+                    }
+                    if (response.Contains("Ready") || response.Contains("No"))
+                    {
+                        player.ChatMessage(response);
+                        return;
+                    }
+                    Status(DLURL, player, response);
+                    if (response != oldmsg)
+                    {
+                        player.ChatMessage(response);
+                        return;
+                    }
+                }, this, RequestMethod.GET);
+            });
+        }
+        
+
 
         public BaseEntity FindBox(BasePlayer player)
         {
@@ -98,30 +253,37 @@ namespace Oxide.Plugins
             return null;
         }
 
-        [ChatCommand("youtube")]
-        void ItemChangeYoutube(BasePlayer player, string arg2, string[] args)
+        [ChatCommand("YT")]
+        void ChangeYoutube(BasePlayer player, string arg2, string[] args)
         {
-            if (!player.IPlayer.HasPermission(permyoutube))
+            if (!player.IPlayer.HasPermission(permYT))
             {
                 player.ChatMessage("<color=red>Dont have persmission to use this command!</color>");
                 return;
             }
-            if (URL == "example.com:1234")
+            if (config.URL == "example.com:1234")
             {
                 player.ChatMessage("<color=red>Plugin Youtube2MP3 server URL must be setup</color>");
                 return;
             }
-            //check there is a url arg
+
             if (args.Length != 1)
             {
                 player.ChatMessage("InvalidArgs");
                 return;
             }
-            if (!args[0].Contains("youtube"))
+            if (Cooldown(player).TotalSeconds > 0)
+            {
+                player.ChatMessage("Please wait for cooldown " + Cooldown(player).ToString("g"));
+                return;
+            }
+            if (!args[0].ToLower().Contains("youtube") && !args[0].ToLower().Contains("youtu.be"))
             {
                 player.ChatMessage("<color=red>Must be a youtube link!</color>");
                 return;
             }
+
+            string DLURL = "http://" + config.URL + "/RUST:" + player.UserIDString + "?YT:" + args[0];
 
             if (player.IsHoldingEntity<HeldBoomBox>())
             {
@@ -132,7 +294,8 @@ namespace Oxide.Plugins
                     noBB(player);
                     return;
                 }
-                ChangeStationPortable(portableradio, "http://" + URL + "/RUST:" + player.displayName + "?YT:" + args[0], player);
+                ChangeStationPortable(portableradio, DLURL, player);
+                Status(DLURL.Replace("?YT:", "?DL:"), player, "NULL");
                 return;
             }
             //check for deployed boombox
@@ -141,13 +304,14 @@ namespace Oxide.Plugins
             {
                 return;
             }
-            ChangeStationDeployed(radio, "http://" + URL + "/RUST:" + player.displayName + "?YT:" + args[0], player);
+            ChangeStationDeployed(radio, DLURL, player);
+            Status(DLURL.Replace("?YT:", "?DL:"), player, "NULL");
             return;
         }
 
 
         [ChatCommand("station")]
-        void ItemChangeStation(BasePlayer player, string arg2, string[] args)
+        void ChangeStation(BasePlayer player, string arg2, string[] args)
         {
             if (!player.IPlayer.HasPermission(perm))
             {
@@ -157,13 +321,17 @@ namespace Oxide.Plugins
             //check there is a url arg
             if (args.Length != 1)
             {
+                if (player.IPlayer.HasPermission(permAdmin))
+                {
+                    CheckSettings(args, player);
+                    return;
+                }
                 player.ChatMessage("InvalidArgs");
                 return;
             }
             //checks its a valid stream
-            if (!CheckLink(args[0]))
+            if (!CheckLink(args[0], player))
             {
-                player.ChatMessage("<color=red>Must be a link to a mp3!</color>");
                 return;
             }
             if (player.IsHoldingEntity<HeldBoomBox>())

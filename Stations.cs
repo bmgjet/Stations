@@ -13,8 +13,8 @@ namespace Oxide.Plugins
     {
         #region Declarations
         const string perm = "Stations.use";
-        const string permYT = "Stations.youtube";
-        const string permAdmin = "Stations.admin";
+        const string permYT = "Stations.youtube";  //Used to send requests to stationsserver.exe
+        const string permAdmin = "Stations.admin"; //Used to change settings from within game.
 
         private static SaveData _data;
         private static PluginConfig config;
@@ -115,6 +115,11 @@ namespace Oxide.Plugins
                 player.ChatMessage("<color=red>Must be a link!</color>");
                 return false;
             }
+            if (url.ToLower().Contains("youtube.com") || url.ToLower().Contains("youtu.be"))
+            {
+                player.ChatMessage("<color=red>Not supported use /yt link</color>");
+                return false;
+            }
             return true;
         }
         private TimeSpan CeilingTimeSpan(TimeSpan timeSpan) =>
@@ -168,11 +173,8 @@ namespace Oxide.Plugins
             }
         }
 
-
-
         public void CheckSettings(string[] args, BasePlayer player)
         {
-
             if (args.Length == 2)
             {
                 switch (args[0])
@@ -200,6 +202,7 @@ namespace Oxide.Plugins
 
         public void Status(string DLURL, BasePlayer player, string oldmsg)
         {
+            //shows in chat stations servers download/conversion status.
             timer.Once(0.5f, () =>
             {
                 webrequest.Enqueue(DLURL, null, (code, response) =>
@@ -209,22 +212,23 @@ namespace Oxide.Plugins
                         Puts($"Couldn't get an response");
                         return;
                     }
-                    if (response.Contains("Ready") || response.Contains("No"))
+                    if (response.Contains("Ready To Play") || response.Contains("No File") || response.Contains("Aborting."))
                     {
                         player.ChatMessage(response);
                         return;
                     }
-                    Status(DLURL, player, response);
                     if (response != oldmsg)
                     {
+                        if(response == "Converting")
+                        {
+                            player.ChatMessage("Downloaded 100%");
+                        }
                         player.ChatMessage(response);
-                        return;
                     }
+                    Status(DLURL, player, response);
                 }, this, RequestMethod.GET);
             });
         }
-        
-
 
         public BaseEntity FindBox(BasePlayer player)
         {
@@ -263,7 +267,7 @@ namespace Oxide.Plugins
             }
             if (config.URL == "example.com:1234")
             {
-                player.ChatMessage("<color=red>Plugin Youtube2MP3 server URL must be setup</color>");
+                player.ChatMessage("<color=red>Plugin Station Server URL must be setup</color>");
                 return;
             }
 
